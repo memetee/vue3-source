@@ -1,0 +1,469 @@
+### 创建项目
+
+- 使用pnpm+monorepo管理项目依赖，先初始化一个项目
+
+  ```bash
+  pnpm init
+  ```
+
+- 想要使用monorepo管理项目需要创建一个文件叫`pnpm-workspace.yaml`,并且要告诉monorepo管理的目录是哪一个
+
+  ./pnpm-workspace.yaml
+
+  ```shell
+  packages:
+    - "packages/*"
+  ```
+
+- 接着创建packages目录
+
+- 当我们这样配置完monorepo之后，我们下载依赖就会变成这样了(之前可能需要再后面加 -w 但是现在不需要了)
+
+  ```shell
+   pnpm install typescript @types/node -D
+  ```
+
+- 接下来执行ts的初始化，注意应该执行项目中的，而不是全局的，所以这里用的是npx
+
+  ```shell
+  npx tsc --init
+  ```
+
+- 生成了一个tsconfig.json，这里对它进行一个配置
+
+  ./tsconfig.json
+
+  ```json
+  {
+    "compilerOptions": {
+      "target": "ESNext", // 指定 ECMAScript 目标版本
+      "module": "ESNext", // 指定模块代码生成规范
+      "moduleResolution": "node", // 指定模块解析策略
+      "outDir": "dist", // 指定编译输出的目录
+      "resolveJsonModule": true, // 允许导入 JSON 文件
+      "strict": false, // 关闭严格模式
+      "lib": ["ESNext", "DOM"], // 指定要使用的库文件
+      "paths": {
+        "@vue/*": ["packages/*/src"]
+      },
+      "baseUrl": "./"
+    }
+  }
+  ```
+
+- 接下来处理我们打包的配置，需要先装一个依赖，这里是用esbuild来打包，并且对esbuild进行配置
+
+  ```shell
+  pnpm install esbuild -D
+  ```
+
+  配置esbuild，这里配置了一个dev的命令，用来执行scripts下的dev文件，注意：这里加了一个type，因为以后是需要用ES6的模块话，所以需要再这里配置type，配置完以后整个项目就是ES6的模块化了
+
+  ```json
+  {
+    "name": "Vue3",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "type": "module",
+    "scripts": {
+      "dev": "node scripts/dev.js"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "packageManager": "pnpm@10.28.2",
+    "devDependencies": {
+      "esbuild": "^0.27.5",
+      "typescript": "^6.0.2"
+    }
+  }
+  ```
+
+- 配置代码格式化
+
+  ```shell
+  pnpm install prettier -D
+  ```
+  
+  配置规则
+  
+  ```json
+  {
+    "semi": false,
+    "singleQuote": true,
+    "htmlWhitespaceSensitivity": "ignore",
+    "trailingComma": "all",
+    "arrowParens": "avoid"
+  }
+  ```
+  
+  
+
+
+
+- 接着创建一个文件夹scripts，并且在这个文件夹下面创建一个文件dev
+
+  - 可以在这里dev文件里面写一些日志，测试是否能打包，这里是测试了一下
+
+    ```shell
+    $ pnpm run dev
+    
+    > Vue3@1.0.0 dev C:\wuwuwu\Vue\Vue3
+    > node scripts/dev.js
+    
+    正在打包开发环境...
+    ```
+
+- 接下来就可以写dev的打包配置来进行开发环境的打包
+
+当前项目文件目录：
+
+```shell
+├─📁 packages/-------------- # 所有的包
+├─📁 scripts/--------------- # 打包配置
+│ └─📄 dev.js--------------- # 打包配置文件
+├─📄 .prettierrc------------ # 代码格式化
+├─📄 package.json----------- # 包管理
+├─📄 pnpm-lock.yaml--------- # pnpm管理
+├─📄 pnpm-workspace.yaml---- # monorepo配置
+└─📄 tsconfig.json---------- # ts配置
+```
+
+
+
+
+
+### 配置dev打包文件
+
+首先怎么用打包配置？
+
+- 可能加参数，例如esm，那么可能是`node scripts/dev.js --format esm`、`node scripts/dev.js --format cjs`，所以我们可能需要拿到参数，那么在node中可以通过`process.argv`来拿到，例如：
+
+  ./package.json
+
+  ```json
+    "scripts": {
+      "dev": "node scripts/dev.js --format cjs"
+    },
+  ```
+
+  在dev.js中打印了process.argv的话，可以得到
+
+  ```shell
+  $ pnpm run dev
+  
+  > Vue3@1.0.0 dev C:\wuwuwu\Vue\Vue3
+  > node scripts/dev.js --format cjs
+  
+  [
+    'C:\\nvm4w\\nodejs\\node.exe',
+    'C:\\wuwuwu\\Vue\\Vue3\\scripts\\dev.js',
+    '--format',
+    'cjs'
+  ]
+  ```
+
+- 但是我们想要的是对象，可以通过这种方式
+
+  dev.js
+
+  ```js
+  /**
+   * 打包开发环境
+   *
+   * node scripts/dev.js --format cjs
+   */
+  import { parseArgs } from "node:util";
+  const { values } = parseArgs({
+    options: {
+      format: {
+        type: "string", // 选项的类型
+        short: "f", // 选项的短名称
+        default: "esm", // 选项的默认值
+      },
+    },
+  });
+  console.log(values);
+  ```
+
+  执行`npm run dev`之后就可以得到，注意这里结构出来了values
+
+  ```shell
+  $ pnpm run dev
+  
+  > Vue3@1.0.0 dev C:\wuwuwu\Vue\Vue3
+  > node scripts/dev.js --format cjs
+  
+  [Object: null prototype] { format: 'cjs' }
+  ```
+
+- 上面做完之后，我们就能正确解析出传过来的参数了，但是还有一个问题，就是我们monorepo管理的项目可能有很多包，比如reactivity包（创建一个文件夹叫reactivity），vue包（创建一个文件夹叫vue），那我们打哪个包呢？所以还需要一个位置参数
+
+  ```json
+    "scripts": {
+      "dev": "node scripts/dev.js reactivity --format cjs"
+    },
+  ```
+
+  紧接着配置位置参数（这里对values也做了进一步结构）
+
+  ```js
+  /**
+   * 打包开发环境
+   *
+   * node scripts/dev.js --format cjs
+   */
+  import { parseArgs } from 'node:util'
+  
+  /**
+   * 解析命令行参数
+   */
+  const {
+    values: { format },
+    positionals,
+  } = parseArgs({
+    allowPositionals: true, // 允许位置参数
+    options: {
+      format: {
+        type: 'string', // 选项的类型
+        short: 'f', // 选项的短名称
+        default: 'esm', // 选项的默认值
+      },
+    },
+  })
+  console.log(format, positionals)
+  ```
+  
+- 接下来要拿到入口文件，上面写的reactivity实际上想做的是要打包reactivity这个包的文件，所以我们先要拿到目标的打包文件，对这个目标打包文件进行打包
+
+  ./scripts/dev.js
+
+  ```js
+  ...
+  
+  // 如果有获取到要打包的目标，否则默认打包整个 vue
+  const target = positionals.length ? positionals[0] : 'vue'
+  ```
+
+- 因为不同的包，我们获取的方式是一样的，所以我们必须保证所有的包的文件层级，入口都是一样的，所以我们需要统一，这里创建了reactivity和vue的入口文件
+
+  ```shell
+  ├─📁 packages/-------------- # 所有的包
+  │ ├─📁 reactivity/---------- # 响应式包
+  │ │ └─📁 src/--------------- # 响应式核心代码
+  │ │   └─📄 index.ts--------- # 入口文件
+  │ └─📁 vue/----------------- # vue包
+  │   └─📁 src/--------------- # vue核心代码
+  │     └─📄 index.ts--------- # 入口文件
+  ├─📁 scripts/--------------- # 打包配置
+  │ └─📄 dev.js--------------- # 开发环境配置文件
+  ├─📄 .prettierrc------------ # 代码格式化配置
+  ├─📄 package.json----------- # 项目管理
+  ├─📄 pnpm-lock.yaml--------- # pnpm包管理
+  ├─📄 pnpm-workspace.yaml---- # monorepo配置
+  └─📄 tsconfig.json---------- # ts配置
+  ```
+
+- 接着配置打包入口
+
+  ./scripts/dev.js
+
+  ```js
+  import { resolve } from 'node:path'
+  
+  ...
+  
+  // 配置入口文件
+  const entry = resolve(__dirname, `../packages/${target}/src/index.ts`)
+  console.log('entry', entry)
+  ```
+
+  这里跑一下的时候会发现报错，原因是__dirname是commonJS中的，ESModule是没有的，所有需要自己创建一个`__dirname`
+
+  ```js
+  import { dirname, resolve } from 'node:path'
+  import { fileURLToPath } from 'node:url'
+  
+  ...
+  
+  console.log(format, positionals)
+  // 创建esm的__filename和__dirname
+  const __filename = fileURLToPath(import.meta.url)
+  const __dirname = dirname(__filename)
+  
+  // 如果有获取到要打包的目标，否则默认打包整个 vue
+  const target = positionals.length ? positionals[0] : 'vue'
+  
+  // 配置入口文件
+  const entry = resolve(__dirname, `../packages/${target}/src/index.ts`)
+  
+  console.log('entry', entry)
+  ```
+
+  打印结果
+
+  ```shell
+  $ pnpm run dev
+  
+  > Vue3@1.0.0 dev C:\wuwuwu\Vue\Vue3
+  > node scripts/dev.js reactivity --format cjs
+  
+  cjs [ 'reactivity' ]
+  entry C:\wuwuwu\Vue\Vue3\packages\reactivity\src\index.ts
+  ```
+
+- 拿到了需要打的包，还拿到了该包的入口文件，那么我们就可以配置打包的esbuild了
+
+  ```js
+  ...
+  
+  import esbuild from 'esbuild'
+  
+  ...
+  
+  esbuild
+    .context({
+      entryPoints: [entry], // 入口文件
+      outfile: resolve(
+        __dirname,
+        `../packages/${target}/dist/${target}.${format}.js`, // 针对不同的格式输出不同的文件
+      ), // 输出文件
+      format, // 输出格式
+      platform: format === 'cjs' ? 'node' : 'browser', // 目标平台
+      sourcemap: true, // 生成 source map
+      bundle: true, // 打包所有依赖到一个依赖中
+    })
+    .then(ctx => {
+      ctx.watch() // 监听文件变化，自动重新打包
+    })
+  
+  ```
+
+- 这样配置完了之后执行`pnpm run dev`就可以了，作为测试可以在`reactivity/src/index.js`中写一些代码，然后可以观察到在reactivity/dist中生成打包后的代码
+
+  ./reactivity/src/index.js
+
+  ```js
+  export function foo(a, b) {
+    return a + b
+  }
+  ```
+
+  打包后的代码这里不再贴出
+
+- 当然也可以把打包格式进行调整`"dev": "node scripts/dev.js reactivity --format esm"`这样打包出来的就变了格式，这里贴出不同格式的代码
+
+  ![image-20260403103152472](./attachments/1-搭建环境.assets/image-20260403103152472.png)
+
+- 但是现在还存在一个问题，比如我们要打包的是IIFE，这种IIFE需要对外提供一个全局变量，所以针对这个也需要处理
+
+- 这里需要在reactivity文件夹下创建一个文件叫`package.json`的文件，并且在里面写配置，这里的配置参考的是vue的配置
+
+  - 所以这里需要安装一个vue，`pnpm install vue`，然后在node_modules里面找到reactivity，然后拿到它的package.json
+
+  - 
+
+  - 这里有一个配置叫`buildOptions`它不是package的配置，是vue自己往里添加的，他的作用就是在使用cdn引入的时候，会往window里面加一些属性，
+
+  - 例如使用window.vue.createApp，那么name就是vue，如果name是VueReactivity，那么就是window.VueReactivity
+
+  - 这里的formats是生产环境用的，生产环境打出来的包就是这些了 
+
+    ./packages/reactivity/package.json
+
+    ```json
+    {
+      "name": "@vue/reactivity",
+      "version": "1.0.0",
+      "description": "响应式模块",
+      "main": "index.js",
+      "module": "dist/reactivity.esm.js.js",
+      "files": [
+        "index.js",
+        "dist"
+      ],
+      "sideEffects": false,
+      "buildOptions": {
+        "name": "VueReactivity",
+        "formats": [
+          "esm-bundler",
+          "esm-browser",
+          "cjs",
+          "global"
+        ]
+      }
+    }
+    ```
+
+    这里删掉了一些用不到的东西，我们项目中用到这些就够了
+
+- 接下来导入reactivity的package.json，注意，因为require它是commonJS的，在ESModule中没有，和上面的`__dirname`一样，所以我们也需要重新获取require
+
+  ./scripts/dev.js
+
+  ```js
+  ...
+  
+  import { createRequire } from 'node:module'
+  
+  ...
+  
+  // 创建esm的__filename和__dirname
+  const __filename = fileURLToPath(import.meta.url)
+  const require = createRequire(import.meta.url)
+  const __dirname = dirname(__filename)
+  
+  ...
+  
+  // 导入package.json
+  const pkg = require(`../packages/${target}/package.json`)
+  console.log(pkg)
+  ...
+  ```
+
+  这样就能获取package.json了
+
+  ```shell
+  $ pnpm run dev
+  
+  > Vue3@1.0.0 dev C:\wuwuwu\Vue\Vue3
+  > node scripts/dev.js reactivity --format esm
+  
+  {
+    name: '@vue/reactivity',
+    version: '1.0.0',
+    description: '响应式模块',
+    main: 'index.js',
+    module: 'dist/reactivity.esm.js.js',
+    files: [ 'index.js', 'dist' ],
+    sideEffects: false,
+    buildOptions: {
+      name: 'VueReactivity',
+      formats: [ 'esm-bundler', 'esm-browser', 'cjs', 'global' ]
+    }
+  }
+  ```
+
+- 之后我们就可以提供全局变量名了
+
+  ./scripts/dev.js
+
+  ```js
+  
+  ...
+  
+  esbuild
+    .context({
+      ...
+      globalName: pkg.buildOptions?.name, // 全局变量名称，umd和iife格式需要
+    })
+    .then(ctx => {
+      ctx.watch() // 监听文件变化，自动重新打包
+    })
+  ...
+      
+  ```
+
+  
+
