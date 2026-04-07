@@ -22,7 +22,15 @@ importers:
         specifier: ^6.0.2
         version: 6.0.2
 
-  packages/reactivity: {}
+  packages/reactivity:
+    dependencies:
+      '@vue/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/shared: {}
+
+  packages/vue: {}
 
 packages:
 

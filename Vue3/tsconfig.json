@@ -10,6 +10,6 @@
     "paths": {
       "@vue/*": ["packages/*/src"]
     },
-    "baseUrl": "./"
+    "baseUrl": "./" // 指定模块解析的基准目录
   }
 }

@@ -1,0 +1,1292 @@
+### 响应式概念
+
+Vue 的响应式系统核心在于响应式对象的属性与 `effect` 副作用函数之间建立的依赖关系。让我们通过具体示例来理解这个概念：
+
+- 普通函数访问响应式数据
+
+```ts
+import { ref } from 'vue'
+
+const count = ref(0)
+
+// 普通函数
+function fn() {
+  console.log(count.value)
+}
+
+fn() // 打印 0
+
+setTimeout(() => {
+  count.value = 1 // 修改值不会触发 fn 重新执行
+}, 1000)
+```
+
+在这个例子中，虽然 `fn` 读取了响应式数据 `count.value`，但由于它不是在 effect 中执行的，因此当 `count.value` 发生变化时，该函数不会重新执行。
+
+- **`effect` 中访问响应式数据**
+
+```ts
+import { ref, effect } from 'vue'
+
+const count = ref(0)
+
+effect(() => {
+  console.log(count.value) // 首次执行打印 0
+})
+
+setTimeout(() => {
+  count.value = 1 // 触发 effect 重新执行，打印 1
+}, 1000)
+```
+
+我们平时使用的 `computed`、`watch`、`watchEffect` 包括组件的 `render` 都是依赖于 `effect` 函数来收集依赖的
+
+当在 effect 中访问响应式数据时，会发生以下过程：
+
+- **依赖收集**：当 `effect` 中的函数首次执行时，访问 `count.value` 会触发 `ref` 的 `get`，此时系统会自动收集当前 `effect` 作为依赖。
+- **触发更新**：当 `count.value` 被修改时，会触发 `ref` 的 `set`，系统会通知之前收集的所有依赖（`effect`）重新执行。
+
+这就是为什么在第二个例子中，修改 `count.value` 会导致 effect 重新执行并打印新值。这种自动追踪依赖和触发更新的机制，正是 Vue 响应式系统的核心特征。
+
+
+
+### 基础响应式
+
+- 创建文件`packages/reactivity/src/ref.ts`
+
+  ```ts
+  class RefImpl {
+    _value
+    constructor(value) {
+      this._value = value
+    }
+  }
+  
+  export function ref(value) {
+    return new RefImpl(value)
+  }
+  
+  ```
+
+- 创建文件`packages/reactivity/src/effect.ts`
+
+  ```ts
+  export function effect(fn) {
+    fn()
+  }
+  ```
+
+- 修改文件`packages\reactivity\src\index.ts`
+
+  ```ts
+  export * from './ref'
+  export * from './effect'
+  ```
+
+- 创建文件`packages\reactivity\examples\01-demo.html`
+
+  ```html
+  <!doctype html>
+  <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>Document</title>
+    </head>
+    <body>
+      <script type="module">
+        import { ref, effect } from '../dist/reactivity.esm.js'
+        console.log(ref, effect)
+      </script>
+    </body>
+  </html>
+  ```
+
+- 这个时候执行`pnpm run dev`，并且把html跑起来之后，就能看到打印的两个函数
+
+- 接着我们前面想执行ref和effect的响应式，当前我们的函数肯定是不行的，这里可以体验下官方的
+
+  packages\reactivity\examples\01-demo.html
+
+  ```html
+  <!doctype html>
+  <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>Document</title>
+    </head>
+    <body>
+      <script type="module">
+        // 我们自己的
+        // import { ref, effect } from '../dist/reactivity.esm.prod.js'
+  
+        // 官方的
+        import {
+          ref,
+          effect,
+        } from '../../../node_modules/vue/dist/vue.esm-browser.js'
+  
+        const count = ref(0)
+        effect(() => {
+          console.log('effect run', count.value) // 打印
+        })
+  
+        setTimeout(() => {
+          count.value = 1
+        }, 1000)
+      </script>
+    </body>
+  </html>
+  ```
+
+  打印结果是
+
+  ```shell
+  effect run 0
+  effect run 1
+  ```
+
+- 官方的没问题，能做到count发生改变，重新执行了effect函数，接着来实现我们的响应式
+
+  /packages\reactivity\src\ref.ts
+
+  ```ts
+  enum ReactivityFlags {
+    IS_REF = '__v_isRef',
+  }
+  
+  /**
+   * ref的类
+   */
+  class RefImpl {
+    // 保存实际的值
+    _value;
+  
+    // ref标记，证明是一个ref对象
+    [ReactivityFlags.IS_REF] = true
+  
+    constructor(value) {
+      this._value = value
+    }
+  }
+  
+  export function ref(value) {
+    return new RefImpl(value)
+  }
+  
+  /**
+   * 判断是不是一个ref对象
+   * @param value 对象
+   * @returns
+   */
+  export function isRef(value) {
+    return !!(value && value[ReactivityFlags.IS_REF])
+  }
+  ```
+
+  - ref类中新增[ReactivityFlags.IS_REF] = true表示他是一个ref对象
+  - 新增枚举
+  - 新增isRef用来判断某一个对象是不是ref对象
+
+- 新增get、set
+
+  packages\reactivity\src\ref.ts
+
+  ```ts
+  
+  ...
+  
+  /**
+   * ref的类
+   */
+  class RefImpl {
+    // 保存实际的值
+    _value;
+  
+    // ref标记，证明是一个ref对象
+    [ReactivityFlags.IS_REF] = true
+  
+    constructor(value) {
+      this._value = value
+    }
+  
+    get value() {
+      // 依赖收集
+      return this._value
+    }
+  
+    set value(newValue) {
+      this._value = newValue
+      // 触发更新
+    }
+  }
+  
+  ...
+  ```
+
+  这里主要用来监听对象的值是否发生变化，这里可以自己测试get函数和set函数是否起作用，不再贴出测试代码
+
+- 虽然可以监听访问和修改，但是怎么收集依赖和触发更新呢？
+
+  - 收集依赖，就是在被访问的时候，拿到需要触发更新的函数
+
+    packages\reactivity\src\effect.ts
+
+    ```ts
+    // 用来保存当前正在执行的effect函数
+    export let activeSub
+    
+    // 依赖收集和触发更新的函数
+    export function effect(fn) {
+      activeSub = fn
+      activeSub()
+      activeSub = undefined
+    }
+    
+    ```
+
+    这里定义一个全局变量，用来保存当前正在触发的依赖
+
+    接着我们再get的时候是可以拿到这个依赖的值的
+
+    packages\reactivity\src\ref.ts
+
+    ```ts
+    ...
+    
+    get value() {
+        console.log('我被访问了')
+        console.log(activeSub)
+        // 依赖收集
+        return this._value
+    }
+    
+    ...
+    ```
+
+  - 这个时候我们在ref中可以拿到需要执行的函数依赖了，那么我们保存起来
+
+    packages\reactivity\src\ref.ts
+
+    ```ts
+    ...
+    
+    
+    /**
+     * ref的类
+     */
+    class RefImpl {
+        
+        ...
+        
+      // 保存和effect之间的关联关系
+      subs
+    
+    	...
+    
+      get value() {
+        if (activeSub) {
+          // 如果activeSub有，那就保存，等更新的时候触发
+          this.subs = activeSub
+        }
+    
+        // 依赖收集
+        return this._value
+      }
+    
+      set value(newValue) {
+        // 触发更新
+        this._value = newValue
+    
+        // 通知effect重新执行，获取最新的值
+        this.subs?.()
+      }
+    }
+    
+    ...
+    
+    ```
+
+    这里面在get中把值保存到subs中，然后触发更新的时候，重新执行了this.subs，这样effect函数就能重新执行了
+
+当前就是基础响应式，可自行测试，这里贴出完整代码
+
+### 基础响应式完整代码
+
+packages\reactivity\src\effect.ts
+
+```ts
+// 用来保存当前正在执行的effect函数
+export let activeSub
+
+// 依赖收集和触发更新的函数
+export function effect(fn) {
+  activeSub = fn
+  activeSub()
+  activeSub = undefined
+}
+```
+
+packages\reactivity\src\index.ts
+
+```ts
+export * from './ref'
+export * from './effect'
+
+```
+
+packages\reactivity\src\ref.ts
+
+```ts
+import { activeSub } from './effect'
+
+enum ReactivityFlags {
+  IS_REF = '__v_isRef',
+}
+
+/**
+ * ref的类
+ */
+class RefImpl {
+  // 保存实际的值
+  _value;
+
+  // ref标记，证明是一个ref对象
+  [ReactivityFlags.IS_REF] = true
+
+  // 保存和effect之间的关联关系
+  subs
+
+  constructor(value) {
+    this._value = value
+  }
+
+  get value() {
+    if (activeSub) {
+      // 如果activeSub有，那就保存，等更新的时候触发
+      this.subs = activeSub
+    }
+
+    // 依赖收集
+    return this._value
+  }
+
+  set value(newValue) {
+    // 触发更新
+    this._value = newValue
+
+    // 通知effect重新执行，获取最新的值
+    this.subs?.()
+  }
+}
+
+export function ref(value) {
+  return new RefImpl(value)
+}
+
+/**
+ * 判断是不是一个ref对象
+ * @param value 对象
+ * @returns
+ */
+export function isRef(value) {
+  return !!(value && value[ReactivityFlags.IS_REF])
+}
+
+```
+
+packages\reactivity\examples\01-demo.html
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+  </head>
+  <body>
+    <script type="module">
+      // 我们自己的
+      import { ref, effect } from '../dist/reactivity.esm.js'
+
+      // 官方的
+      // import {
+      //   ref,
+      //   effect,
+      // } from '../../../node_modules/vue/dist/vue.esm-browser.prod.js'
+
+      const count = ref(0)
+      effect(() => {
+        console.log('effect run', count.value)
+      })
+
+      setTimeout(() => {
+        count.value = 1
+      }, 1000)
+    </script>
+  </body>
+</html>
+
+```
+
+
+
+当前响应式存在一些问题，例如：
+
+- 存在两个effect，那么后面的effect会把前面的effect覆盖掉，所以更新的时候只会更新第二个effect
+
+
+
+### 链表
+
+什么是链表？
+
+链表（Linked List）是一种数据结构，它由一系列节点（Node）组成，每个节点存储一个数据值，并且指向下一个节点，它和数组一样，都是线性数据结构。
+
+链表与数组的区别：
+
+- **数组**: 查找元素速度快（O(1)），这里指的是通过索引查找，但增删元素需要移动其他元素，效率较低（O(n)）。
+- **链表**: 增删元素更快（O(1)），但查找元素需要遍历整个链表（O(n)）。
+
+#### 单向链表
+
+![image-20260403140808670](./attachments/2-响应式.assets/image-20260403140808670.png)
+
+在单向链表中，通常会有一个**头节点（必须）和尾节点（非必须）**
+
+**head**: 头节点，表示链表的第一个节点，如果我们需要遍历这个链表，需要从它开始，对应图中 **node1**
+ **tail**: 尾节点，表示链表的最后一个节点，对应图中 **node4**
+
+在这个结构中可以看出，链表的 **头节点（head）** 是 `node1`，通过 `node1` 的 `next` 属性可以访问到 `node2`，每个节点都有一个 `next` 属性，指向下一个节点，直到最后一个节点 node4，在这个案例中 node4 是最后一个节点，我们通常称它为**尾结点（tail）**
+
+前面我们也说了，链表和数组都属于线性数据结构，它对比数组有什么优势呢？
+
+以下是链表和数组在新增和删除操作时的对比案例：
+
+- 数组
+
+```ts
+const arr = ['a', 'b', 'c', 'd'] // a=>0  b=>1  c=>2  d=>3
+
+// 删除数组的第一项
+arr.shift()
+
+console.log(arr) // ['b', 'c', 'd'] b=>0  c=>1  d=>2
+```
+
+我们初始化的时候声明了一个数组 `arr`，然后调用 `arr.shift()` 删除数组的第一个元素，此时移除第一个元素后，数组的所有元素的索引都会变动，都需要往前移动一位，这样是比较耗费性能的
+
+- 链表
+
+```ts
+// 头节点是 head
+let head = {
+  value: 1,
+  next: {
+    value: 2,
+    next: {
+      value: 3,
+      next: {
+        value: 4,
+        next: null
+      }
+    }
+  }
+}
+
+// 删除链表的第一项
+head = head.next // 将头节点指向下一个节点 node2
+
+console.log(head) // 输出新的头节点 [2, 3, 4]
+```
+
+来看一下这个图片
+
+![image-20260403140820907](./attachments/2-响应式.assets/linked-remove-head.gif)
+
+可以看到在链表中，如果我要删除 `node1`，只需让 `head` 指向 `head.next`，这样 `node2` 就成为新的头节点，而 `node1` 会被垃圾回收自动释放。
+
+##### 对比总结
+
+只针对头节点操作，不考虑移除中间节点
+
+- **数组**：
+  - 新增操作需要移动后续元素，可能导致性能下降（O(n)）。
+  - 删除操作同样需要移动后续元素，性能也为 O(n)。
+- **链表**：
+  - 新增操作只需修改指针，性能为 O(1)。
+  - 删除操作也只需修改指针，性能为 O(1)。
+
+通过上面的案例我们了解到，链表的节点新增和删除动作，是会比数组要快的，但是我们目前只是删除了头节点，那如果我要删除某一个中间节点呢？这个时候仅靠单向链表也能做到：
+
+```ts
+// 头节点是 head
+
+let head = { value: 1, next: undefined }
+
+const node2 = {
+  value: 2,
+  next: undefined
+}
+
+const node3 = {
+  value: 3,
+  next: undefined
+}
+
+const node4 = {
+  value: 4,
+  next: undefined
+}
+
+// 建立链表之间的关系
+head.next = node2
+node2.next = node3
+node3.next = node4
+
+// 好，我们忘掉前面的动作，假设现在手里只有 node3
+
+// 现在我们要把 node3 删掉
+
+let current = head
+while (current) {
+  // 找到 node3 的上一个节点
+  if (current.next === node3) {
+    // 把 node3 的上一个指向 node3 的下一个
+    current.next = node3.next
+    break
+  }
+  current = current.next
+}
+
+console.log(head) // 输出新的链表 [1, 2，4]
+```
+
+
+
+#### 双向链表
+
+上一章我们讲了单向链表，它存在一个问题，就是它不能快速的往前面添加节点，比如在下面这个案例中，我们在 **`node3`** 前面添加一个节点，这个时候我们很难直接通过 **`node3`** 把新节点和 **`node2`** 关联起来，当然你可以通过遍历的方式拿到 **node2**， 但是这样时间复杂度就比较高了，有没有什么快速删除的方式呢？有的
+
+那么我们再来思考一下，我们现在想往 `node3` 前面添加一个，但是我们必须把这个新节点和 node2 建立关联关系，如果我们能拿到 node2 就好办了，下面来看一下双向链表结构
+
+![image-20260403142857703](./attachments/2-响应式.assets/image-20260403142857703.png)
+
+**这就是双向链表的结构图**
+
+此时每个节点都有一个属性 `prev` 指向它的上一个节点，如果我需要在 `node3` 前面添加 `node5` ，那我们是不是可以通过 `node3` 的 `prev` 拿到 `node2`，这个时候我们手里就有三个节点 `node2` 、`node3`、`node5`，我们只需要把 `node2` 的 `next` 指向 `node5`，`node5` 的 `next` 指向 `node3`，就 ok 了
+
+```ts
+// 假设链表的头节点是 head
+
+let head = {
+  value: 1,
+  next: undefined,
+  prev: undefined
+}
+
+const node2 = {
+  value: 2,
+  next: undefined,
+  prev: undefined
+}
+
+const node3 = {
+  value: 3,
+  next: undefined,
+  prev: undefined
+}
+
+const node4 = {
+  value: 4,
+  next: undefined,
+  prev: undefined
+}
+
+// 建立链表之间的关系
+head.next = node2
+// node2 的上一个节点指向 head
+node2.prev = head
+// node2 的下一个指向 node3
+node2.next = node3
+// node3 的上一个节点指向 node2
+node3.prev = node2
+// node3 的下一个指向 node4
+node3.next = node4
+// node4 的上一个指向 node3
+node4.prev = node3
+
+// 好，我们忘掉前面的动作，假设现在手里只有 node3
+
+// 现在我们要把 node3 删掉
+
+// 如果 node3 有上一个，那就把上一个节点的下一个指向 node3 的下一个
+if (node3.prev) {
+  node3.prev.next = node3.next
+} else {
+  head = node3.next
+}
+
+if (node3.next) {
+  node3.next.prev = node3.prev
+}
+console.log(head) // 输出新的链表 [1, 2, 4]
+```
+
+到此我们讲完了链表相关的知识，接下来我们会在 vue 源码中使用它，再来看一下它到底有多强大
+
+
+
+### 链表应用到响应式当中
+
+- 创建一个接口，这个就是链表节点
+
+  packages\reactivity\src\ref.ts
+
+  ```ts
+  	...
+      
+      
+  /**
+   * 链表节点
+   */
+  interface Link {
+    // 保存effect
+    sub: Function
+  
+    // 下一个节点,如果没有就是undefined
+    nextSub: Link | undefined
+  
+    // 上一个节点,如果没有就是undefined
+    prevSub: Link | undefined
+  }
+  
+      ...
+  ```
+
+  这里先创建一个接口，这个接口表示我们链表的每一个节点有哪些东西，首先sub表示我们的依赖，也就是effect执行的函数
+
+- 创建头节点和尾节点
+
+  packages\reactivity\src\ref.ts
+
+  ```ts
+  ...
+  
+  class RefImpl {
+      ...
+      
+      
+    /**
+     * 订阅者链表的头节点
+     */
+    subs: Link
+  
+    /**
+     * 订阅者链表的尾节点
+     */
+    subsTail: Link
+      
+      ...
+  }
+  
+  ...
+  ```
+
+  subs是头节点，subs是尾节点，他们的结构都一样
+
+- 收集依赖的时候创建头节点
+
+  packages\reactivity\src\ref.ts
+
+  ```ts
+  ...
+  
+  class RefImpl {
+    ...
+    
+    get value() {
+      if (activeSub) {
+        // 如果activeSub有，那就保存，等更新的时候触发
+        const newLink: Link = {
+          sub: activeSub,
+          nextSub: undefined,
+          prevSub: undefined,
+        }
+  
+        /**
+         * 把新的订阅者添加到链表的尾部
+          1. 如果链表不为空，就把新的订阅者添加到链表的尾部
+          2. 如果链表为空，就把新的订阅者作为链表的头节点和尾节点
+         */
+        if (this.subsTail) {
+          this.subsTail.nextSub = newLink
+          newLink.prevSub = this.subsTail
+          this.subsTail = newLink
+        } else {
+          this.subs = newLink
+          this.subsTail = newLink
+        }
+      }
+  
+      // 依赖收集
+      return this._value
+    }
+      
+    ...
+  }
+  
+  ...
+  ```
+
+  这里的get会先判断当前是否存在依赖项，如果存在的话先创建一个节点，然后判断当前链表中是否存在节点，如果存在尾节点，表示列表中是存在节点的，如果不存在尾节点表示当前是不存在节点的（这里是双向链表），如果存在节点的话，把新创建的节点放到尾节点，并且移动尾节点的位置，如果不存在尾节点，那么就是头尾相同。
+
+- 更新的时候触发依赖
+
+  packages\reactivity\src\ref.ts
+
+  ```ts
+  ...
+  
+  class RefImpl {
+    ...
+    
+    set value(newValue) {
+      // 触发更新
+      this._value = newValue
+  
+      let link = this.subs
+      const queueEffect = []
+      while (link) {
+        queueEffect.push(link.sub)
+        link = link.nextSub
+      }
+      queueEffect.forEach(effect => effect())
+    }
+      
+    ...
+  }
+  
+  ...
+  ```
+
+  直接拿到链表，然后拿到所有的sub，也就是依赖，进行触发
+
+- 上面的代码有些乱了，这里对代码做一些优化
+
+  创建文件`packages\reactivity\src\system.ts`
+
+  ```ts
+  /**
+   * 链表节点
+   */
+  export interface Link {
+    // 保存effect
+    sub: Function
+  
+    // 下一个节点,如果没有就是undefined
+    nextSub: Link | undefined
+  
+    // 上一个节点,如果没有就是undefined
+    prevSub: Link | undefined
+  }
+  
+  /**
+   * 链接ref和effect，建立ref和effect之间的链表关系
+   * @param dep ref对象
+   * @param sub effect函数（依赖项）
+   */
+  export function link(dep, sub) {
+    // 如果activeSub有，那就保存，等更新的时候触发
+    const newLink: Link = {
+      sub,
+      nextSub: undefined,
+      prevSub: undefined,
+    }
+  
+    /**
+         * 把新的订阅者添加到链表的尾部
+          1. 如果链表不为空，就把新的订阅者添加到链表的尾部
+          2. 如果链表为空，就把新的订阅者作为链表的头节点和尾节点
+         */
+    if (dep.subsTail) {
+      dep.subsTail.nextSub = newLink
+      newLink.prevSub = dep.subsTail
+      dep.subsTail = newLink
+    } else {
+      dep.subs = newLink
+      dep.subsTail = newLink
+    }
+  }
+  
+  /**
+   * 传播更新
+   * @param subs 依赖项
+   */
+  export function propagate(subs) {
+    let link = subs
+    const queueEffect = []
+    while (link) {
+      queueEffect.push(link.sub)
+      link = link.nextSub
+    }
+    queueEffect.forEach(effect => effect())
+  }
+  
+  ```
+
+  这个文件主要保存的是收集依赖创建节点，触发更新，和Link接口
+
+  ref文件更新`packages\reactivity\src\ref.ts`
+
+  ```ts
+  import { activeSub } from './effect'
+  import { Link, link, propagate } from './system'
+  enum ReactivityFlags {
+    IS_REF = '__v_isRef',
+  }
+  
+  /**
+   * ref的类
+   */
+  class RefImpl {
+    // 保存实际的值
+    _value;
+  
+    // ref标记，证明是一个ref对象
+    [ReactivityFlags.IS_REF] = true
+  
+    /**
+     * 订阅者链表的头节点
+     */
+    subs: Link
+  
+    /**
+     * 订阅者链表的尾节点
+     */
+    subsTail: Link
+  
+    constructor(value) {
+      this._value = value
+    }
+  
+    get value() {
+      if (activeSub) {
+        trackRef(this)
+      }
+  
+      // 依赖收集
+      return this._value
+    }
+  
+    set value(newValue) {
+      // 触发更新
+      this._value = newValue
+      triggerRef(this)
+    }
+  }
+  
+  export function ref(value) {
+    return new RefImpl(value)
+  }
+  
+  /**
+   * 判断是不是一个ref对象
+   * @param value 对象
+   * @returns
+   */
+  export function isRef(value) {
+    return !!(value && value[ReactivityFlags.IS_REF])
+  }
+  
+  /**
+   * 收集依赖，建立ref和effect之间的链表关系
+   * @param dep ref对象
+   */
+  export function trackRef(dep) {
+    if (activeSub) {
+      link(dep, activeSub)
+    }
+  }
+  
+  /**
+   * 触发更新，遍历链表，执行所有的effect函数
+   * @param dep ref对象
+   */
+  export function triggerRef(dep) {
+    if (dep.subs) {
+      propagate(dep.subs)
+    }
+  }
+  
+  ```
+
+  这里新增了triggerRef用来触发更新，trackRef用来收集依赖，通过引用system中的方法来实现
+
+- 这里是对代码的优化，对实际内容没有影响，依然能实现多个effect的依赖收集和依赖触发
+
+
+
+
+
+### 对effect的优化
+
+- 对前面的effect进行重写，用一个类来生成effect
+
+  packages\reactivity\src\effect.ts
+
+  ```ts
+  // 用来保存当前正在执行的effect函数
+  export let activeSub
+  
+  export class ReactiveEffect {
+    fn: Function
+    constructor(fn) {
+      this.fn = fn
+    }
+    run() {
+      // 每次执行之前把this放到activeSub上，这样在依赖收集的时候就能知道当前正在执行的effect函数了
+      activeSub = this // 这里保存的是对象了
+      try {
+        return this.fn()
+      } finally {
+        // 执行完成之后把activeSub置空，这样在依赖收集的时候就知道没有正在执行的effect函数了
+        activeSub = undefined
+      }
+    }
+  }
+  
+  // 依赖收集和触发更新的函数
+  export function effect(fn) {
+    const e = new ReactiveEffect(fn)
+    e.run()
+  }
+  ```
+
+  这里用一个类来实现了触发effect的行为，之前是直接调用activeSub来触发依赖的更新，但是这里实现了一个类，通过类的run方法来触发依赖的更新
+
+- 修改触发更新的方式
+
+  packages\reactivity\src\system.ts
+
+  ```ts
+  /**
+   * 链表节点
+   */
+  export interface Link {
+    // 保存effect
+    sub: ReactiveEffect
+  
+    // 下一个节点,如果没有就是undefined
+    nextSub: Link | undefined
+  
+    // 上一个节点,如果没有就是undefined
+    prevSub: Link | undefined
+  }
+  ```
+
+  Link接口中的sub不再是单纯的activeSub函数了，而是ReactiveEffect的实例对象
+
+  
+
+  packages\reactivity\src\system.ts
+
+  ```ts
+  /**
+   * 传播更新
+   * @param subs 依赖项
+   */
+  export function propagate(subs) {
+    let link = subs
+    const queueEffect = []
+    while (link) {
+      queueEffect.push(link.sub)
+      link = link.nextSub
+    }
+    queueEffect.forEach(effect => effect.run())
+  }
+  ```
+
+  触发更新的propagate函数不能再直接调用，而是调用run方法了
+
+  以上是对effect暂时的优化
+
+- 但是目前effect存在一个问题，就是如果出现了effect嵌套会怎么样？
+
+  packages\reactivity\examples\01-demo.html
+
+  ```html
+  <!doctype html>
+  <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>Document</title>
+    </head>
+    <body>
+      <script type="module">
+        // 我们自己的
+        import { ref, effect } from '../dist/reactivity.esm.js'
+  
+        // 官方的
+        // import {
+        //   ref,
+        //   effect,
+        // } from '../../../node_modules/vue/dist/vue.esm-browser.prod.js'
+  
+        const count = ref(0)
+        effect(() => {
+          effect(() => {
+            console.log('effect run-嵌套的', count.value)
+          })
+          console.log('effect run-外部的', count.value)
+        })
+  
+        setTimeout(() => {
+          count.value = 1
+        }, 1000)
+      </script>
+    </body>
+  </html>
+  ```
+
+  正常来讲，这里有两个effect，初始会打印两次，一秒钟之后还是会打印两次
+
+  打印结果
+
+  ```shell
+  effect run-嵌套的 0
+  effect run-外部的 0
+  effect run-嵌套的 1
+  ```
+
+  可以发现，这里在一秒钟之后只打印了一次，并且打印的是嵌套的
+
+- 为什么会发生这种情况呢？
+
+  ![image-20260403155854448](./attachments/2-响应式.assets/image-20260403155854448.png)
+
+  当activeSub设置为undefined以后，嵌套的effect彻底执行完了，接着执行外层的打印，也就是访问count.value，这个时候也会触发收集依赖
+
+  ![image-20260403160036211](./attachments/2-响应式.assets/image-20260403160036211.png)
+
+  因为activeSub为undefined，所以收集不到依赖了，也就不会触发外层effect的更新了
+
+  - 如何收集外层的更新呢？
+
+    - 简单来讲就是通过一个变量来记录，判断当前的activeSub如果有值的话，那我可以把这个activeSub的值赋值给prevSub，然后我再安心的给activeSub赋值，当我执行完了之后，我再把prevSub的值给到activeSub，这样的话他们就不影响了
+
+    packages\reactivity\src\effect.ts
+
+    ```ts
+    // 用来保存当前正在执行的effect函数
+    export let activeSub
+    
+    export class ReactiveEffect {
+      fn: Function
+      constructor(fn) {
+        this.fn = fn
+      }
+      run() {
+        // 先将当前的effect保存起来，用来处理嵌套的逻辑
+        const prevSub = activeSub
+        // 每次执行之前把this放到activeSub上，这样在依赖收集的时候就能知道当前正在执行的effect函数了
+        activeSub = this // 这里保存的是对象了
+        try {
+          return this.fn()
+        } finally {
+          // 这里恢复之前的effect函数，这样在处理嵌套的逻辑的时候就能正确地收集依赖了
+          activeSub = prevSub 
+        }
+      }
+    }
+    
+    // 依赖收集和触发更新的函数
+    export function effect(fn) {
+      const e = new ReactiveEffect(fn)
+      e.run()
+    }
+    
+    ```
+
+    这里在run方法中新增了一个prevSub赋值为activeSub，然后在activeSub中重新给prevSub赋值了
+
+    我们这里的是跟官方的结果一样的
+
+    打印结果
+
+    ```shell
+    effect run-嵌套的 0
+    effect run-外部的 0
+    effect run-嵌套的 1
+    effect run-嵌套的 1
+    effect run-外部的 1
+    ```
+
+    这里在更新的时候触发了两次嵌套的，这个结果是和官方的一样
+
+  - 接着我们继续看一下这个东西*scheduler*，先看官方的这个功能，注意：这里用的是官方的
+
+    ```js
+          effect(
+            () => {
+              console.log('effect run-外部的', count.value)
+            },
+            {
+              scheduler(fn) {
+                console.log('触发了调度器')
+              },
+            },
+          )
+          setTimeout(() => {
+            count.value = 1
+          }, 1000)
+    ```
+
+    打印结果
+
+    ```shell
+    effect run-外部的 0
+    触发了调度器
+    ```
+
+    初始打印了`effect run-外部的 0`，接着一秒钟之后打印了`触发了调度器`，这个现象和我们理解的不太一样，他一秒钟之后不触发effect的依赖，而是触发了第二个参数对象中的scheduler函数
+
+  - 实现scheduler，scheduler的意思是调度器，就是可选的可以让收集的依赖发生变化的时候不去执行effect依赖，而是指定执行调度器函数
+
+    - 传过来scheduler就意味着effect要接受第二个参数
+
+      packages\reactivity\src\effect.ts
+
+      ```js
+      ...
+      // 依赖收集和触发更新的函数
+      export function effect(fn, options) {
+          ...
+      }
+      ```
+
+      接着在effect中定义一个函数叫schduler
+
+      packages\reactivity\src\effect.ts
+
+      ```ts
+      export class ReactiveEffect {
+          
+          ...
+          
+        scheduler() {
+          this.run()
+        }
+      }
+      ```
+
+      scheduler直接调用this.run方法，它是定义在原型上的，意味着，如果实例有scheduler，那么会把它覆盖掉，执行覆盖的scheduler，如果没有的话，就会执行他。
+
+      所以effect函数需要对ReactiveEffect的实力和options进行合并
+
+      packages\reactivity\src\effect.ts
+
+      ```js
+      // 依赖收集和触发更新的函数
+      export function effect(fn, options) {
+        const e = new ReactiveEffect(fn)
+        // scheduler
+        Object.assign(e, options)
+      
+        e.run()
+      }
+      
+      ```
+
+      options里面如果有传来scheduler，那么就会把它和实例进行合并，那实例中的scheduler就会被覆盖，但是还存在一个问题，触发scheduler，所以还需要增加一个函数，这里叫notify
+
+      packages\reactivity\src\effect.ts
+
+      ```ts
+      export class ReactiveEffect {
+          
+          ...
+          
+        notify() {
+          this.scheduler()
+        }
+      
+         ...
+      }
+      ```
+
+      这样的话，只需要调用notify，不管scheduler会不会被覆盖，都不重要，都会被调用触发
+
+      这里还需要对调用依赖项修改为notify
+
+      packages\reactivity\src\system.ts
+
+      ```ts
+      ...
+      
+      /**
+       * 传播更新
+       * @param subs 依赖项
+       */
+      export function propagate(subs) {
+         ...
+        queueEffect.forEach(effect => effect.notify())
+      }
+      ```
+
+    - 接着，effect是有返回值的，返回的是一个函数，在官方中是有的，在往下看之前可以打印一下官方的返回
+
+      packages\reactivity\src\effect.ts
+    
+      ```ts
+      ...
+      // 依赖收集和触发更新的函数
+      export function effect(fn, options) {
+        const e = new ReactiveEffect(fn)
+        // scheduler
+        Object.assign(e, options)
+      
+        e.run()
+      
+        const runner = e.run.bind(e);
+          
+          /**
+          * 把effect实例放到函数属性中
+          */
+        runner.effect = e
+        return runner
+      }
+      ```
+    
+      注意，这里不能直接返回e.run会丢失this
+    
+    - 当scheduler实现之后，是不是意味着我们不能调用effect依赖函数呢？不是的
+    
+      packages\reactivity\examples\01-demo.html
+    
+      ```js
+            const count = ref(0)
+            let runner = effect(
+              () => {
+                console.log('effect run-外部的', count.value)
+                return 123
+              },
+              {
+                scheduler() {
+                  const res = runner()
+                  console.log('触发了调度器', res)
+                },
+              },
+            )
+      
+            console.dir(runner)
+            setTimeout(() => {
+              count.value = 1
+            }, 1000)
+      ```
+    
+      这里的runner就是effect返回的，上面对他做了一些处理，所以我们这里能拿到，并且这个runner就是e.runner()，所以我们直接调用拿到的就是依赖。所以这里会打印`触发了调度器123`
+

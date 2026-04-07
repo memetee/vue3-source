@@ -20,10 +20,24 @@ var VueReactivity = (() => {
   // packages/reactivity/src/index.ts
   var index_exports = {};
   __export(index_exports, {
-    foo: () => foo
+    effect: () => effect,
+    ref: () => ref
   });
-  function foo(a, b) {
-    return a + b;
+
+  // packages/reactivity/src/ref.ts
+  var RefImpl = class {
+    _value;
+    constructor(value) {
+      this._value = value;
+    }
+  };
+  function ref(value) {
+    return new RefImpl(value);
+  }
+
+  // packages/reactivity/src/effect.ts
+  function effect(fn) {
+    fn();
   }
   return __toCommonJS(index_exports);
 })();

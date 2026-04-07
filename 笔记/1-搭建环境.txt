@@ -43,14 +43,11 @@
       "resolveJsonModule": true, // 允许导入 JSON 文件
       "strict": false, // 关闭严格模式
       "lib": ["ESNext", "DOM"], // 指定要使用的库文件
-      "paths": {
-        "@vue/*": ["packages/*/src"]
-      },
       "baseUrl": "./"
     }
   }
   ```
-
+  
 - 接下来处理我们打包的配置，需要先装一个依赖，这里是用esbuild来打包，并且对esbuild进行配置
 
   ```shell
@@ -134,7 +131,7 @@
 
 
 
-### 配置dev打包文件
+### 配置dev开发环境打包
 
 首先怎么用打包配置？
 
@@ -377,8 +374,8 @@
       "name": "@vue/reactivity",
       "version": "1.0.0",
       "description": "响应式模块",
-      "main": "index.js",
-      "module": "dist/reactivity.esm.js.js",
+      "main": "dist/reactivity.cjs.js",
+      "module": "dist/reactivity.esm.js",
       "files": [
         "index.js",
         "dist"
@@ -392,8 +389,12 @@
           "cjs",
           "global"
         ]
+      },
+      "dependencies": {
+        "@vue/shared": "workspace:*"
       }
     }
+    
     ```
 
     这里删掉了一些用不到的东西，我们项目中用到这些就够了
@@ -465,5 +466,241 @@
       
   ```
 
+- 当这样配置完以后，`"dev": "node scripts/dev.js reactivity --format iife"`可以看到我们打包出来的文件文件，就暴露了一个变量出来，并且这个变量是通过var定义的，所以他就会绑定到window上面了（这里不给出打包出来的代码，自行观察）
+
+
+
+### 其他文件补充
+
+- 创建vue的package.json
+
+  ```json
+  {
+    "name": "vue",
+    "version": "1.0.0",
+    "description": "vue核心包",
+    "main": "dist/vue.cjs.js",
+    "module": "dist/vue.esm.js",
+    "files": [
+      "dist"
+    ],
+    "sideEffects": false,
+    "buildOptions": {
+      "name": "Vue",
+      "formats": [
+        "esm-bundler",
+        "esm-browser",
+        "cjs",
+        "global"
+      ]
+    }
+  }
+  ```
+
+- 创建shared文件夹及shared文件夹下的src/index.ts文件
+
+- 创建shared文件夹下的package.json
+
+  ```json
+  {
+    "name": "@vue/shared",
+    "version": "1.0.0",
+    "description": "工具函数",
+    "main": "dist/shared.cjs.js",
+    "module": "dist/shared.esm.js",
+    "files": [
+      "index.js",
+      "dist"
+    ],
+    "sideEffects": false,
+    "buildOptions": {
+      "name": "VueShared",
+      "formats": [
+        "esm-bundler",
+        "esm-browser",
+        "cjs",
+        "global"
+      ]
+    }
+  }
+  ```
+
   
+
+### monorepo使用依赖包
+
+- monorepo管理的项目获取依赖包和我们平常使用依赖包不同，例如：
+
+  - 我们再shared/src/index.ts中写一个工具函数
+
+    ./shared/src/index.ts
+
+    ```ts
+    export function isObject(value: any): value is Record<any, any> {
+      return value !== null && typeof value === 'object'
+    }
+    ```
+
+    导出了一个函数叫isObject，我们希望在reactivity中使用
+
+- 在reactivity中使用isObject，首先要下载这个依赖包
+
+  ```shell
+  pnpm install @vue/shared --workspace --filter @vue/reactivity
+  ```
+
+  这里的**workpace**表示使用monorepo中的包，**--filter**表示安装到@vue/reactivity这个项目中
+
+- 安装完了以后就可以在reactivity项目的package.json中看到
+
+  ./reactivity/package.json
+
+  ```json
+  {
+  	...
+      
+    "dependencies": {
+      "@vue/shared": "workspace:*"
+    }
+  }
+  
+  ```
+
+- 这样就可以在reactivity中使用了
+
+  ./reactivity/src/index.ts
+
+  ```ts
+  import { isObject } from '@vue/shared'
+  
+  isObject({})
+  
+  ```
+
+- 另外，如果使用了ts后编辑器报错，找不到的话，我们需要在ts中进行配置
+
+  ./tsconfig.json
+
+  ```json
+  {
+    "compilerOptions": {
+        ...
+      "paths": {
+        "@vue/*": ["packages/*/src"]
+      }
+    }
+  }
+  
+  ```
+
+  表示我们再使用@vue/下所有的引用的时候，就去packages文件夹下去找，也就不会报错了
+
+
+
+
+
+### 当前项目目录
+
+到这里开发环境的打包就完成了，这里给出目录
+
+```js
+├─📁 packages/----------------------- # 所有的包
+│ ├─📁 reactivity/------------------- # 响应式包
+│ │ ├─📁 dist/----------------------- # 打包出来的文件
+│ │ │ ├─📄 reactivity.cjs.js--------- # cjs格式
+│ │ │ ├─📄 reactivity.cjs.js.map----- # 打包出来的souce map
+│ │ │ ├─📄 reactivity.esm.js--------- # 打包出来的esm
+│ │ │ ├─📄 reactivity.esm.js.map----- # 打包出来的souce map
+│ │ │ ├─📄 reactivity.iife.js-------- # iife格式
+│ │ │ └─📄 reactivity.iife.js.map---- # 打包出来的souce map
+│ │ ├─📁 node_modules/--------------- # reactivity的依赖
+│ │ ├─📁 src/------------------------ # 响应式核心代码
+│ │ │ └─📄 index.ts------------------ # 入口文件
+│ │ └─📄 package.json---------------- # reactivity依赖的包管理
+│ ├─📁 shared/----------------------- # 工具函数
+│ │ ├─📁 src/------------------------ # 工具函数核心代码
+│ │ │ └─📄 index.ts------------------ # 入口文件
+│ │ └─📄 package.json---------------- # package文件
+│ └─📁 vue/-------------------------- # vue包
+│   ├─📁 src/------------------------ # vue核心代码
+│   │ └─📄 index.ts------------------ # 入口文件
+│   └─📄 package.json---------------- # package文件
+├─📁 scripts/------------------------ # 打包配置
+│ └─📄 dev.js------------------------ # 开发环境配置文件
+├─📄 .prettierrc--------------------- # 代码格式化配置
+├─📄 package.json-------------------- # 项目管理
+├─📄 pnpm-lock.yaml------------------ # pnpm包管理
+├─📄 pnpm-workspace.yaml------------- # monorepo配置
+└─📄 tsconfig.json------------------- # ts配置
+```
+
+
+
+### 开发环境配置完整代码
+
+./scripts/dev.js
+
+```js
+/**
+ * 打包开发环境
+ *
+ * node scripts/dev.js --format cjs
+ */
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parseArgs } from 'node:util'
+import esbuild from 'esbuild'
+import { createRequire } from 'node:module'
+
+/**
+ * 解析命令行参数
+ */
+const {
+  values: { format },
+  positionals,
+} = parseArgs({
+  allowPositionals: true, // 允许位置参数
+  options: {
+    format: {
+      type: 'string', // 选项的类型
+      short: 'f', // 选项的短名称
+      default: 'esm', // 选项的默认值
+    },
+  },
+})
+
+// 创建esm的__filename和__dirname
+const __filename = fileURLToPath(import.meta.url)
+const require = createRequire(import.meta.url)
+const __dirname = dirname(__filename)
+
+// 如果有获取到要打包的目标，否则默认打包整个 vue
+const target = positionals.length ? positionals[0] : 'vue'
+
+// 配置入口文件
+const entry = resolve(__dirname, `../packages/${target}/src/index.ts`)
+
+// 导入package.json
+const pkg = require(`../packages/${target}/package.json`)
+
+esbuild
+  .context({
+    entryPoints: [entry], // 入口文件
+    outfile: resolve(
+      __dirname,
+      `../packages/${target}/dist/${target}.${format}.js`, // 针对不同的格式输出不同的文件
+    ), // 输出文件
+    format, // 输出格式
+    platform: format === 'cjs' ? 'node' : 'browser', // 目标平台
+    sourcemap: true, // 生成 source map
+    bundle: true, // 打包所有依赖到一个依赖中
+    globalName: pkg.buildOptions?.name, // 全局变量名称，umd和iife格式需要
+  })
+  .then(ctx => {
+    ctx.watch() // 监听文件变化，自动重新打包
+  })
+
+```
+
+
 

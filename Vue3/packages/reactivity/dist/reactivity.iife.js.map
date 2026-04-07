@@ -1,7 +1,7 @@
 {
   "version": 3,
-  "sources": ["../src/index.ts"],
-  "sourcesContent": ["export function foo(a, b) {\r\n  return a + b\r\n}\r\n"],
-  "mappings": ";;;;;;;;;;;;;;;;;;;;AAAA;AAAA;AAAA;AAAA;AAAO,WAAS,IAAI,GAAG,GAAG;AACxB,WAAO,IAAI;AAAA,EACb;",
+  "sources": ["../src/index.ts", "../src/ref.ts", "../src/effect.ts"],
+  "sourcesContent": ["export * from './ref'\r\nexport * from './effect'\r\n", "class RefImpl {\r\n  _value\r\n  constructor(value) {\r\n    this._value = value\r\n  }\r\n}\r\n\r\nexport function ref(value) {\r\n  return new RefImpl(value)\r\n}\r\n", "export function effect(fn) {\r\n  fn()\r\n}\r\n"],
+  "mappings": ";;;;;;;;;;;;;;;;;;;;AAAA;AAAA;AAAA;AAAA;AAAA;;;ACAA,MAAM,UAAN,MAAc;AAAA,IACZ;AAAA,IACA,YAAY,OAAO;AACjB,WAAK,SAAS;AAAA,IAChB;AAAA,EACF;AAEO,WAAS,IAAI,OAAO;AACzB,WAAO,IAAI,QAAQ,KAAK;AAAA,EAC1B;;;ACTO,WAAS,OAAO,IAAI;AACzB,OAAG;AAAA,EACL;",
   "names": []
 }

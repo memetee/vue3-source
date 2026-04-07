@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+  </head>
+  <body>
+    <script type="module">
+      // 我们自己的
+      import { ref, effect } from '../dist/reactivity.esm.js'
+
+      // 官方的
+      // import {
+      //   ref,
+      //   effect,
+      // } from '../../../node_modules/vue/dist/vue.esm-browser.prod.js'
+
+      const count = ref(0)
+      let runner = effect(
+        () => {
+          console.log('effect run-外部的', count.value)
+          return 123
+        },
+        {
+          scheduler() {
+            const res = runner()
+            console.log('触发了调度器', res)
+          },
+        },
+      )
+
+      console.dir(runner)
+      setTimeout(() => {
+        count.value = 1
+      }, 1000)
+    </script>
+  </body>
+</html>
