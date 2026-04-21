@@ -1,0 +1,388 @@
+## 前言
+
+这里是响应式的第二部分，前面完成了响应式的基本开发，实现了响应式的基本功能，包括收集依赖，触发依赖，创建链表结构等等，但是依然存在很多问题，这里一一列出这些问题，并且解决这些问题
+
+
+
+## 问题一：重复触发
+
+这里新增一个demo文件
+
+./02-demo.html
+
+```html
+	<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      body {
+        padding: 150px;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="btn">按钮</button>
+    <script type="module">
+      // 我们自己的
+      import { ref, effect } from '../dist/reactivity.esm.js'
+
+      // 官方的
+      // import {
+      //   ref,
+      //   effect,
+      // } from '../../../node_modules/vue/dist/vue.esm-browser.prod.js'
+
+      const flag = ref(true)
+
+      effect(() => {
+        flag.value
+        console.count('effect')
+      })
+
+      btn.onclick = () => {
+        console.log('点击了按钮')
+        flag.value = !flag.value
+      }
+    </script>
+  </body>
+</html>
+
+```
+
+接着启动这个文件
+
+接着点击这个按钮
+
+![image-20260407131957856](./attachments/3-响应式(2).assets/image-20260407131957856.png)
+
+这张图片展示我点击按钮后控制台出现的打印，这里有一个问题，就是我在第二次打印的时候，effect执行了两次，其实在点击第三次的时候会打印四次
+
+为什么呢？
+
+先看一张图
+
+![无标题-2026-04-07-1326](./attachments/3-响应式(2).assets/无标题-2026-04-07-1326.svg)
+
+ 这里先创建了一个叫flag的ref，这个ref会创建一个链表，头节点和尾节点都是link1，这个link1的sub就是effect，结合代码来看
+
+![无标题-2026-04-07-1326](./attachments/3-响应式(2).assets/无标题-2026-04-07-1326-1775543065750-2.svg)
+
+从这个流程来看，每一次点击，就会执行一次effect，每执行一次effect，就会往链表中新增一个节点，然后重复执行effect
+
+这里的问题是，每一次点击都会执行一次effect，但是如果存在相同的effect，并且是相同的ref，其实是不需要加入到该ref链表的节点中的
+
+如果说我第一次收集的时候，知道收集的是什么依赖，那么下一次重新执行的时候，我就不收集了，尝试复用之前的链表节点
+
+在源码里面是这样做的，现在的情况是ref的subs是一个链表，subs是链表的头节点，然后节点有一个sub，指向的是effect，那么在源码中，effect他也有一个链表，链表的头节点是deps，deps是一个头节点指向的是link节点，也就是ref的节点，并且给link节点新增一个dep，指向的是ref，画图出来是这样
+
+![无标题-2026-04-07-1326](./attachments/3-响应式(2).assets/无标题-2026-04-07-1327.svg)
+
+接下来修改代码
+
+packages\reactivity\src\effect.ts
+
+```js
+export class ReactiveEffect {
+  /**
+   * 依赖链表的头节点
+   */
+  deps: Link | undefined
+
+  /**
+   * 依赖链表的尾节点
+   */
+  depsTail: Link | undefined
+  	...
+}
+```
+
+给effect新增deps（头节点）和deepsTail（尾节点）
+
+
+
+packages\reactivity\src\system.ts
+
+```js
+/**
+ * 依赖项
+ */
+interface Dep {
+  // 发布者链表的头节点
+  subs: Link | undefined
+
+  // 发布者链表的尾节点
+  subsTail: Link | undefined
+}
+
+/**
+ * 链表节点
+ */
+export interface Link {
+  // 保存effect
+  sub: Sub
+
+  // 下一个节点,如果没有就是undefined
+  nextSub: Link | undefined
+
+  // 上一个节点,如果没有就是undefined
+  prevSub: Link | undefined
+
+  // 订阅者
+  dep: Dep
+
+  // 下一个订阅者节点
+  nextDep: Link | undefined
+}
+
+
+
+/**
+ * 链接ref和effect，建立ref和effect之间的链表关系
+ * @param dep ref对象
+ * @param sub effect函数（依赖项）
+ */
+export function link(dep, sub) {
+  // 如果activeSub有，那就保存，等更新的时候触发
+  const newLink: Link = {
+    dep,
+    sub,
+    nextSub: undefined,
+    prevSub: undefined,
+    nextDep: undefined,
+  }
+
+    ...
+
+  // 将链表节点和sub建立关联关系(这里是单向链表)
+  /**
+   * 把新的依赖项添加到链表的尾部
+   1. 如果链表不为空，就把新的依赖项添加到链表的尾部
+   2. 如果链表为空，就把新的依赖项作为链表的头节点和尾节点
+   */
+  if (sub.depsTail) {
+    sub.depsTail.nextDep = newLink
+    sub.depsTail = newLink
+  } else {
+    sub.deps = newLink
+    sub.depsTail = newLink
+  }
+}
+```
+
+修改link，给每一个link增加一个dep，保存的是，保存的是flag，也就是ref，也就是发布者，紧接着，在创建link的时候，还需要创建出来订阅者和dep的关联关系
+
+这个时候我们来看一下现在的effect是什么样
+
+packages\reactivity\examples\02-demo.html
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      body {
+        padding: 150px;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="btn">按钮</button>
+    <script type="module">
+      // 我们自己的
+      import { ref, effect } from '../dist/reactivity.esm.js'
+
+      // 官方的
+      // import {
+      //   ref,
+      //   effect,
+      // } from '../../../node_modules/vue/dist/vue.esm-browser.prod.js'
+
+      const flag = ref(true)
+
+      const e = effect(() => {
+        flag.value
+        console.count('effect')
+      })
+      console.dir(e)
+
+      btn.onclick = () => {
+        console.log('点击了按钮')
+        flag.value = !flag.value
+      }
+    </script>
+  </body>
+</html>
+
+```
+
+![image-20260407164907700](./attachments/3-响应式(2).assets/image-20260407164907700.png)
+
+这里的deps中的dep就是我们的发布者者了，也就是ref了，整个deps对象也就是link节点，也就是头节点，节点会保存了订阅者（ref）、上一个订阅者、下一个订阅者、发布者、上一个发布者、下一个发布者。
+
+现在我们想做的是当下一次点击的时候，我们去复用
+
+首先要把effect中的depsTail设置为undefined，这样做的目的是做一个标识，如果一个sub的deps有值，但是他的depsTail没有值，表示这个link是可以被复用的
+
+packages\reactivity\src\effect.ts
+
+```ts
+export class ReactiveEffect {
+    ...
+  run() {
+        ...
+    /**
+     *  这里设置为undefined是做一个标记。如果头节点为undefined，
+     * 尾节点也是undefined表示，可以复用link，
+     * 但凡头节点不是undefined表示可以复用link了
+     */
+    this.depsTail = undefined
+    try {
+      return this.fn()
+    } finally {
+      // 执行完成之后把activeSub置空，这样在依赖收集的时候就知道没有正在执行的effect函数了
+      activeSub = undefined
+      activeSub = prevSub // 这里恢复之前的effect函数，这样在处理嵌套的逻辑的时候就能正确地收集依赖了
+    }
+  }
+	...
+}
+```
+
+当设置完这个表示以后，我们在生成link节点之前可以做一个判断
+
+packages\reactivity\src\system.ts
+
+```ts
+
+/**
+ * 链接ref和effect，建立ref和effect之间的链表关系
+ * @param dep ref对象
+ * @param sub effect函数（依赖项）
+ */
+export function link(dep, sub) {
+  const currentDep = sub.depsTail
+  const nextDep = currentDep === undefined ? sub.deps : undefined
+  console.log('currentDep', nextDep)
+  // 如果当前的订阅者的头节点有值，尾节点为undefined，说明可以复用link
+  if (nextDep && nextDep.dep === dep) {
+    console.log('相同的依赖，直接复用', dep)
+    sub.depsTail = nextDep
+    return
+  }
+    ...
+}
+```
+
+这里分为两种情况，第一次的时候，dep的subs和subTail都是没有值的，也就是undefined，第一次sub的deps和depsTail也都是没有值的，也是undefined
+
+所以nextDep就是undefined了
+
+所以这个if进不去
+
+当第二次的时候sub的depsTail是undefined了（执行run方法前设置了undefined），所以nextDep有值了（因为第一次会给effect设置链表，subDeps是链表的头节点），nextDep的值就是effect的头节点也就是subs，此时的dep还是第一次的activeSub，所以他们是相等的，那么这个if判断会成立，也就不会重新创建link了
+
+这里画一下代码执行图
+
+![无标题-2026-04-07-1326](./attachments/3-响应式(2).assets/无标题-2026-04-07-1328.svg)
+
+到这里，就可以解决这种多次收集link，然后触发多个link的问题。这里通过复用link的方式实现，复用利用到了sub的deps链表和dep的subs链表，只要subs的dep链表节点中存在当前触发的dep，那么表示已经收集过了这个dep依赖，不必重新收集依赖
+
+但是现在又会出现新的问题
+
+packages\reactivity\examples\02-demo.html
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      body {
+        padding: 150px;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="btn">按钮</button>
+    <script type="module">
+      // 我们自己的
+      import { ref, effect } from '../dist/reactivity.esm.js'
+
+      // 官方的
+      // import {
+      //   ref,
+      //   effect,
+      // } from '../../../node_modules/vue/dist/vue.esm-browser.prod.js'
+
+      const flag = ref(true)
+      const count = ref(0)
+
+      const e = effect(() => {
+        flag.value
+        count.value
+        console.count('effect')
+      })
+
+      btn.onclick = () => {
+        count.value++
+      }
+    </script>
+  </body>
+</html>
+
+```
+
+这里新增了一个count，并且在点击的时候给count.value++
+
+新的问题是什么呢？点击第一次的时候正常打印effect，点击第二次的时候会打印两次effect，这就有问题了
+
+原因是什么呢？
+
+![无标题-2026-04-07-1326](./attachments/3-响应式(2).assets/无标题-2026-04-07-1330.svg)
+
+怎么解决这个问题呢？上面的根源就是count在进行第二次收集的时候重复收集了，然后创建出来了一个link3，但是count他其实是可以复用的，也就是说不需要创建link3, 可以在count要创建link之前加一个判断，可以先看下图
+
+
+
+![无标题-2026-04-07-1326](./attachments/3-响应式(2).assets/无标题-2026-04-07-1331.svg)
+
+这个时候能很明显的看到effect的depsTail是有值的，并且depsTail的nextDep还是有值的，所以这个时候,这样做，如果sub的尾节点depsTail的nextDep有值的话，那么使用nextDep进行复用，并且把尾节点指向这个nextDep
+
+![无标题-2026-04-07-1326](./attachments/3-响应式(2).assets/无标题-2026-04-07-1332.svg)
+
+packages\reactivity\src\system.ts
+
+```ts
+/**
+ * 链接ref和effect，建立ref和effect之间的链表关系
+ * @param dep ref对象
+ * @param sub effect函数（依赖项）
+ */
+export function link(dep, sub) {
+  // region 尝试复用链表节点
+  const currentDep = sub.depsTail
+
+  // 分两种情况，如果头节点有，尾节点没有，那么尝试复用头节点
+  // 如果尾节点还有nextDep,尝试复用尾节点的nextDep
+  const nextDep = currentDep === undefined ? sub.deps : currentDep.nextDep
+  // 如果当前的订阅者的头节点有值，尾节点为undefined，说明可以复用link
+  if (nextDep && nextDep.dep === dep) {
+    sub.depsTail = nextDep
+    return
+  }
+    ...
+}
+```
+
+加上这一层判断
+
+那么能不能用set呢？答案是能的，vue以前用的也是set，但是为了性能呢，后来转向了这个链表结构。
+

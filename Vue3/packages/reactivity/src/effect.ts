@@ -1,7 +1,19 @@
+import { Link } from './system'
+
 // 用来保存当前正在执行的effect函数
 export let activeSub
 
 export class ReactiveEffect {
+  /**
+   * 依赖链表的头节点
+   */
+  deps: Link | undefined
+
+  /**
+   * 依赖链表的尾节点
+   */
+  depsTail: Link | undefined
+
   fn: Function
   constructor(fn) {
     this.fn = fn
@@ -11,12 +23,19 @@ export class ReactiveEffect {
     const prevSub = activeSub
     // 每次执行之前把this放到activeSub上，这样在依赖收集的时候就能知道当前正在执行的effect函数了
     activeSub = this // 这里保存的是对象了
+
+    /**
+     *  这里设置为undefined是做一个标记。如果头节点为undefined，
+     * 尾节点也是undefined表示，可以复用link，
+     * 但凡头节点不是undefined表示可以复用link了
+     */
+    this.depsTail = undefined
     try {
       return this.fn()
     } finally {
       // 执行完成之后把activeSub置空，这样在依赖收集的时候就知道没有正在执行的effect函数了
-      activeSub = undefined
       activeSub = prevSub // 这里恢复之前的effect函数，这样在处理嵌套的逻辑的时候就能正确地收集依赖了
+      console.dir(this)
     }
   }
 

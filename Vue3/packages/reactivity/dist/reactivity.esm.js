@@ -1,6 +1,14 @@
 // packages/reactivity/src/effect.ts
 var activeSub;
 var ReactiveEffect = class {
+  /**
+   * 依赖链表的头节点
+   */
+  deps;
+  /**
+   * 依赖链表的尾节点
+   */
+  depsTail;
   fn;
   constructor(fn) {
     this.fn = fn;
@@ -8,11 +16,12 @@ var ReactiveEffect = class {
   run() {
     const prevSub = activeSub;
     activeSub = this;
+    this.depsTail = void 0;
     try {
       return this.fn();
     } finally {
-      activeSub = void 0;
       activeSub = prevSub;
+      console.dir(this);
     }
   }
   /**
@@ -39,10 +48,18 @@ function effect(fn, options) {
 
 // packages/reactivity/src/system.ts
 function link(dep, sub) {
+  const currentDep = sub.depsTail;
+  const nextDep = currentDep === void 0 ? sub.deps : currentDep.nextDep;
+  if (nextDep && nextDep.dep === dep) {
+    sub.depsTail = nextDep;
+    return;
+  }
   const newLink = {
+    dep,
     sub,
     nextSub: void 0,
-    prevSub: void 0
+    prevSub: void 0,
+    nextDep: void 0
   };
   if (dep.subsTail) {
     dep.subsTail.nextSub = newLink;
@@ -51,6 +68,13 @@ function link(dep, sub) {
   } else {
     dep.subs = newLink;
     dep.subsTail = newLink;
+  }
+  if (sub.depsTail) {
+    sub.depsTail.nextDep = newLink;
+    sub.depsTail = newLink;
+  } else {
+    sub.deps = newLink;
+    sub.depsTail = newLink;
   }
 }
 function propagate(subs) {
