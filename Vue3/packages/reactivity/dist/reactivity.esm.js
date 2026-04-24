@@ -20,8 +20,8 @@ var ReactiveEffect = class {
     try {
       return this.fn();
     } finally {
+      endTrack(this);
       activeSub = prevSub;
-      console.dir(this);
     }
   }
   /**
@@ -45,6 +45,38 @@ function effect(fn, options) {
   runner.effect = e;
   return runner;
 }
+function endTrack(sub) {
+  const depsTail = sub.depsTail;
+  if (depsTail) {
+    if (depsTail.nextDep) {
+      clearTracking(depsTail.nextDep);
+      depsTail.nextDep = void 0;
+    }
+  } else if (sub.deps) {
+    clearTracking(sub.deps);
+    sub.deps = void 0;
+  }
+}
+function clearTracking(link2) {
+  while (link2) {
+    const { dep, nextSub, nextDep, prevSub } = link2;
+    if (prevSub) {
+      prevSub.nextSub = nextSub;
+      link2.nextSub = void 0;
+    } else {
+      dep.subs = nextSub;
+    }
+    if (nextSub) {
+      nextSub.prevSub = prevSub;
+      link2.prevSub = void 0;
+    } else {
+      dep.subsTail = void 0;
+    }
+    link2.dep = link2.sub = void 0;
+    link2.nextDep = void 0;
+    link2 = nextDep;
+  }
+}
 
 // packages/reactivity/src/system.ts
 function link(dep, sub) {
@@ -59,7 +91,8 @@ function link(dep, sub) {
     sub,
     nextSub: void 0,
     prevSub: void 0,
-    nextDep: void 0
+    nextDep
+    // 这里的nextDep是复用失败的
   };
   if (dep.subsTail) {
     dep.subsTail.nextSub = newLink;

@@ -64,7 +64,7 @@ export function link(dep, sub) {
     sub,
     nextSub: undefined,
     prevSub: undefined,
-    nextDep: undefined,
+    nextDep, // 这里的nextDep是复用失败的
   }
 
   // 将链表节点和deep建立关联关系

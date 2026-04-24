@@ -19,13 +19,11 @@
       const count = ref(0)
       let runner = effect(
         () => {
-          console.log('effect run-外部的', count.value)
           return 123
         },
         {
           scheduler() {
             const res = runner()
-            console.log('触发了调度器', res)
           },
         },
       )
